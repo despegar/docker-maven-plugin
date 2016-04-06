@@ -82,7 +82,7 @@ public class StartMojo extends AbstractDockerMojo {
                 RunImageConfiguration runConfig = imageConfig.getRunConfiguration();
                 PortMapping portMapping = runService.getPortMapping(runConfig, projProperties);
 
-                String containerId = runService.createAndStartContainer(imageConfig, portMapping, pomLabel, projProperties);
+                String containerId = getOrCreateContainer(queryService, runService, runConfig, imageConfig, pomLabel, projProperties, portMapping);
 
                 if (showLogs(imageConfig)) {
                     dispatcher.trackContainerLog(containerId,
@@ -116,6 +116,25 @@ public class StartMojo extends AbstractDockerMojo {
                 log.error("Error occurred during container startup, shutting down...");
                 runService.stopStartedContainers(keepContainer, removeVolumes, pomLabel);
             }
+        }
+    }
+
+    private String getOrCreateContainer(QueryService queryService, RunService runService, RunImageConfiguration runConfig, ImageConfiguration imageConfig, PomLabel pomLabel, Properties projProperties, PortMapping portMapping) throws DockerAccessException {
+        if(runConfig.getNamingStrategy().equals(RunImageConfiguration.NamingStrategy.alias)) {
+            if(!queryService.hasContainer(imageConfig.getAlias())) {
+                return runService.createAndStartContainer(imageConfig, portMapping, pomLabel, projProperties);
+            } else {
+                Container container = queryService.getContainer(imageConfig.getAlias());
+                if(container.isRunning()) {
+                    return container.getId();
+                } else {
+                    runService.startContainer(imageConfig, container.getId(), pomLabel);
+                    return container.getId();
+                }
+
+            }
+        } else {
+            return runService.createAndStartContainer(imageConfig, portMapping, pomLabel, projProperties);
         }
     }
 
@@ -272,3 +291,4 @@ public class StartMojo extends AbstractDockerMojo {
     }
 
 }
+

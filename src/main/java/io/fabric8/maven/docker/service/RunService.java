@@ -358,7 +358,7 @@ public class RunService {
         return id;
     }
 
-    private void startContainer(ImageConfiguration imageConfig, String id, PomLabel pomLabel) throws DockerAccessException {
+    public void startContainer(ImageConfiguration imageConfig, String id, PomLabel pomLabel) throws DockerAccessException {
         log.info(imageConfig.getDescription() + ": Start container " + id);
         docker.startContainer(id);
         tracker.registerContainer(id, imageConfig, pomLabel);
@@ -412,3 +412,4 @@ public class RunService {
                  containerId.substring(0, 12));
     }
 }
+
