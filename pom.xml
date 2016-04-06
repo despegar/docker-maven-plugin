@@ -6,7 +6,7 @@
 
   <groupId>com.despegar.sem</groupId>
   <artifactId>docker-maven-plugin</artifactId>
-  <version>0.14.3-SNAPSHOT</version>
+  <version>0.14.3</version>
   <packaging>maven-plugin</packaging>
 
   <name>maven-docker-plugin</name>
@@ -332,7 +332,7 @@
   <scm>
     <connection>scm:git:git://github.com/despegar/docker-maven-plugin.git</connection>
     <developerConnection>scm:git:ssh://git@github.com/despegar/docker-maven-plugin.git</developerConnection>
-    <tag>HEAD</tag>
+    <tag>docker-maven-plugin-0.14.3</tag>
     <url>git://github.com/despegar/docker-maven-plugin.git</url>
   </scm>
 
