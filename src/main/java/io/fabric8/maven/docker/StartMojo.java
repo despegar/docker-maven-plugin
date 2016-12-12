@@ -240,7 +240,7 @@ public class StartMojo extends AbstractDockerMojo {
         startingContainers.submit(new Callable<StartedContainer>() {
             @Override
             public StartedContainer call() throws Exception {
-                final String containerId = runService.createAndStartContainer(image, portMapping, getPomLabel(), projProperties);
+                final String containerId = getOrCreateContainer(hub, image, getPomLabel(), projProperties, portMapping);
 
                 // Update port-mapping writer
                 portMappingPropertyWriteHelper.add(portMapping, runConfig.getPortPropertyFile());
@@ -325,22 +325,22 @@ public class StartMojo extends AbstractDockerMojo {
         return executorService;
     }
 
-    private String getOrCreateContainer(QueryService queryService, RunService runService, RunImageConfiguration runConfig, ImageConfiguration imageConfig, PomLabel pomLabel, Properties projProperties, PortMapping portMapping) throws DockerAccessException {
-        if(runConfig.getNamingStrategy().equals(RunImageConfiguration.NamingStrategy.alias)) {
-            if(!queryService.hasContainer(imageConfig.getAlias())) {
-                return runService.createAndStartContainer(imageConfig, portMapping, pomLabel, projProperties);
+    private String getOrCreateContainer(final ServiceHub hub, ImageConfiguration imageConfig, PomLabel pomLabel, Properties projProperties, PortMapping portMapping) throws DockerAccessException {
+        if(imageConfig.getRunConfiguration().getNamingStrategy().equals(RunImageConfiguration.NamingStrategy.alias)) {
+            if(!hub.getQueryService().hasContainer(imageConfig.getAlias())) {
+                return hub.getRunService().createAndStartContainer(imageConfig, portMapping, pomLabel, projProperties);
             } else {
-                Container container = queryService.getContainer(imageConfig.getAlias());
+                Container container = hub.getQueryService().getContainer(imageConfig.getAlias());
                 if(container.isRunning()) {
                     return container.getId();
                 } else {
-                    runService.startContainer(imageConfig, container.getId(), pomLabel);
+                    hub.getRunService().startContainer(imageConfig, container.getId(), pomLabel);
                     return container.getId();
                 }
 
             }
         } else {
-            return runService.createAndStartContainer(imageConfig, portMapping, pomLabel, projProperties);
+            return hub.getRunService().createAndStartContainer(imageConfig, portMapping, pomLabel, projProperties);
         }
     }
 
