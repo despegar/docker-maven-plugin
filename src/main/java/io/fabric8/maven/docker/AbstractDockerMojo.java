@@ -1,14 +1,14 @@
 package io.fabric8.maven.docker;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.*;
 
-import io.fabric8.maven.docker.access.AuthConfig;
-import io.fabric8.maven.docker.access.DockerAccess;
-import io.fabric8.maven.docker.access.DockerAccessException;
+import io.fabric8.maven.docker.access.*;
 import io.fabric8.maven.docker.access.hc.DockerAccessWithHcClient;
+import io.fabric8.maven.docker.config.ConfigHelper;
 import io.fabric8.maven.docker.service.QueryService;
 import io.fabric8.maven.docker.service.ServiceHub;
 import io.fabric8.maven.docker.service.ServiceHubFactory;
@@ -25,6 +25,7 @@ import org.codehaus.plexus.context.Context;
 import org.codehaus.plexus.context.ContextException;
 import org.codehaus.plexus.personality.plexus.lifecycle.phase.Contextualizable;
 import io.fabric8.maven.docker.config.ImageConfiguration;
+import io.fabric8.maven.docker.config.DockerMachineConfiguration;
 import io.fabric8.maven.docker.config.handler.ImageConfigResolver;
 import io.fabric8.maven.docker.log.LogDispatcher;
 import io.fabric8.maven.docker.log.LogOutputSpecFactory;
@@ -35,7 +36,7 @@ import io.fabric8.maven.docker.log.LogOutputSpecFactory;
  * @author roland
  * @since 26.03.14
  */
-public abstract class AbstractDockerMojo extends AbstractMojo implements Contextualizable {
+public abstract class AbstractDockerMojo extends AbstractMojo implements Contextualizable, ConfigHelper.Customizer {
 
     // Key for indicating that a "start" goal has run
     public static final String CONTEXT_KEY_START_CALLED = "CONTEXT_KEY_DOCKER_START_CALLED";
@@ -43,12 +44,17 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
     // Key holding the log dispatcher
     public static final String CONTEXT_KEY_LOG_DISPATCHER = "CONTEXT_KEY_DOCKER_LOG_DISPATCHER";
 
-    // Standard HTTPS port (IANA registered). The other 2375 with plain HTTP is used only in older
-    // docker installations.
-    public static final String DOCKER_HTTPS_PORT = "2376";
+    // Key under which the build timestamp is stored so that other mojos can reuse it
+    public static final String CONTEXT_KEY_BUILD_TIMESTAMP = "CONTEXT_KEY_BUILD_TIMESTAMP";
+
+    // Key for the previously used image cache
+    public static final String CONTEXT_KEY_PREVIOUSLY_PULLED = "CONTEXT_KEY_PREVIOUSLY_PULLED";
 
     // Minimal API version, independent of any feature used
     public static final String API_VERSION = "1.18";
+
+    // Filename for holding the build timestamp
+    public static final String DOCKER_BUILD_TIMESTAMP = "docker/build.timestamp";
 
     // Current maven project
     @Parameter(defaultValue= "${project}", readonly = true)
@@ -59,8 +65,12 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
     protected Settings settings;
 
     // Current maven project
-    @Parameter(defaultValue= "${session}", readonly = true)
+    @Parameter(property= "session")
     protected MavenSession session;
+
+    // Current mojo execution
+    @Parameter(property= "mojoExecution")
+    protected MojoExecution execution;
 
     // Handler for external configurations
     @Component
@@ -83,7 +93,9 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
     @Parameter(property = "docker.apiVersion")
     private String apiVersion;
 
-    // URL to docker daemon
+    /**
+     * URL to docker daemon
+     */
     @Parameter(property = "docker.host")
     private String dockerHost;
 
@@ -110,11 +122,19 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
     @Parameter(property = "docker.skip", defaultValue = "false")
     private boolean skip;
 
-    // Whether to restrict operation to a single image. This can be either
-    // the image or an alias name. It can also be comma separated list.
-    // This parameter is typically set via the command line.
-    @Parameter(property = "docker.image")
-    private String image;
+    /**
+     * Whether the usage of docker machine should be skipped competely
+     */
+    @Parameter(property = "docker.skip.machine", defaultValue = "false")
+    private boolean skipMachine;
+
+    /**
+     * Whether to restrict operation to a single image. This can be either
+     * the image or an alias name. It can also be comma separated list.
+     * This parameter has to be set via the command line s system property.
+     */
+    @Parameter(property = "docker.filter")
+    private String filter;
 
     // Default registry to use if no registry is specified
     @Parameter(property = "docker.registry")
@@ -124,23 +144,31 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
     @Parameter(property = "docker.maxConnections", defaultValue = "100")
     private int maxConnections;
 
-    // property file to write out with port mappings
-    @Parameter
-    protected String portPropertyFile;
-    
     // Authentication information
     @Parameter
     Map authConfig;
 
-    // Relevant images configuration to use. This includes also references to external
-    // images
+    /**
+     * Image configurations configured directly.
+     */
     @Parameter
     private List<ImageConfiguration> images;
+
+    // Docker-machine configuration
+    @Parameter
+    private DockerMachineConfiguration machine;
+
+    // Images resolved with external image resolvers and hooks for subclass to
+    // mangle the image configurations.
+    private List<ImageConfiguration> resolvedImages;
 
     // Handler dealing with authentication credentials
     private AuthConfigFactory authConfigFactory;
 
     protected Logger log;
+
+    // API version as requested from the client
+    private String serverVersion;
 
     /**
      * Entry point for this plugin. It will set up the helper class and then calls
@@ -153,18 +181,22 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
     @Override
     public void execute() throws MojoExecutionException, MojoFailureException {
         if (!skip) {
-            log = new AnsiLogger(getLog(), useColor, verbose);
+            log = new AnsiLogger(getLog(), useColor, verbose, !settings.getInteractiveMode(), getLogPrefix());
             LogOutputSpecFactory logSpecFactory = new LogOutputSpecFactory(useColor, logStdout, logDate);
 
-            String minimalApiVersion = validateConfiguration(log);
+            // The 'real' images configuration to use (configured images + externally resolved images)
+            String minimalApiVersion = initImageConfiguration(getBuildTimestamp());
             DockerAccess access = null;
             try {
                 access = createDockerAccess(minimalApiVersion);
                 ServiceHub serviceHub = serviceHubFactory.createServiceHub(project, session, access, log, logSpecFactory);
                 executeInternal(serviceHub);
             } catch (DockerAccessException exp) {
-                log.error(exp.getMessage());
+                log.error("%s", exp.getMessage());
                 throw new MojoExecutionException(log.errorMessage(exp.getMessage()), exp);
+            } catch (MojoExecutionException exp) {
+                log.error("%s", exp.getMessage());
+                throw exp;
             } finally {
                 if (access != null) {
                     access.shutdown();
@@ -173,16 +205,85 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
         }
     }
 
+    /**
+     * Get the current build timestamp. this has either already been created by a previous
+     * call or a new current date is created
+     * @return timestamp to use
+     */
+    protected synchronized Date getBuildTimestamp() throws MojoExecutionException {
+        Date now = (Date) getPluginContext().get(CONTEXT_KEY_BUILD_TIMESTAMP);
+        if (now == null) {
+            now = getReferenceDate();
+            getPluginContext().put(CONTEXT_KEY_BUILD_TIMESTAMP,now);
+        }
+        return now;
+    }
+
+    // Get the referenc date for the build. By default this is picked up
+    // from an existing build date file. If this does not exist, the current date is used.
+    protected Date getReferenceDate() throws MojoExecutionException {
+        Date referenceDate = EnvUtil.loadTimestamp(getBuildTimestampFile());
+        return referenceDate != null ? referenceDate : new Date();
+    }
+
+    // used for storing a timestamp
+    protected File getBuildTimestampFile() {
+        return new File(project.getBuild().getDirectory(), DOCKER_BUILD_TIMESTAMP);
+    }
+
+    /**
+     * Log prefix to use when doing the logs
+     * @return
+     */
+    protected String getLogPrefix() {
+        return AnsiLogger.DEFAULT_LOG_PREFIX;
+    }
+
+    // Resolve and customize image configuration
+    private String initImageConfiguration(Date buildTimeStamp)  {
+        // Resolve images
+        resolvedImages = ConfigHelper.resolveImages(
+            log,
+            images,                  // Unresolved images
+            new ConfigHelper.Resolver() {
+                    @Override
+                    public List<ImageConfiguration> resolve(ImageConfiguration image) {
+                        return imageConfigResolver.resolve(image, project, session);
+                    }
+                },
+           filter,                   // A filter which image to process
+            this);                     // customizer (can be overwritten by a subclass)
+
+        // Initialize configuration and detect minimal API version
+        return ConfigHelper.initAndValidate(resolvedImages, apiVersion, new ImageNameFormatter(project, buildTimeStamp), log);
+    }
+
+    // Customization hook for subclasses to influence the final configuration. This method is called
+    // before initialization and validation of the configuration.
+    @Override
+    public List<ImageConfiguration> customizeConfig(List<ImageConfiguration> imageConfigs) {
+        return imageConfigs;
+    }
+
     private DockerAccess createDockerAccess(String minimalVersion) throws MojoExecutionException, MojoFailureException {
         DockerAccess access = null;
         if (isDockerAccessRequired()) {
-            String dockerUrl = EnvUtil.extractUrl(dockerHost);
             try {
+                DockerConnectionDetector dockerConnectionDetector = createDockerConnectionDetector();
+                DockerConnectionDetector.ConnectionParameter connectionParam =
+                    dockerConnectionDetector.detectConnectionParameter(dockerHost, certPath);
                 String version =  minimalVersion != null ? minimalVersion : API_VERSION;
-                access = new DockerAccessWithHcClient("v" + version, dockerUrl,
-                                                      EnvUtil.getCertPath(certPath), maxConnections, log);
+                access = new DockerAccessWithHcClient("v" + version, connectionParam.getUrl(),
+                                                      connectionParam.getCertPath(),
+                                                      maxConnections,
+                                                      log);
                 access.start();
-                setDockerHostAddressProperty(dockerUrl);
+                setDockerHostAddressProperty(connectionParam.getUrl());
+                serverVersion = access.getServerApiVersion();
+                if (!EnvUtil.greaterOrEqualsVersion(serverVersion,version)) {
+                    throw new MojoExecutionException(
+                        String.format("Server API version %s is smaller than required API version %s", serverVersion, version));
+                }
             }
             catch (IOException e) {
                 throw new MojoExecutionException("Cannot create docker access object ", e);
@@ -191,6 +292,34 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
         return access;
     }
 
+    private DockerConnectionDetector createDockerConnectionDetector() {
+        return new DockerConnectionDetector(getDockerHostProviders());
+    }
+
+    /**
+     * Return a list of providers which could delive connection parameters from
+     * calling external commands. For this plugin this is docker-machine, but can be overridden
+     * to add other config options, too.
+     *
+     * @return list of providers or <code>null</code> if none are applicable
+     */
+    protected List<DockerConnectionDetector.DockerHostProvider> getDockerHostProviders() {
+        DockerMachineConfiguration config = machine;
+        if (config == null) {
+            Properties projectProps = project.getProperties();
+            if (!skipMachine) {
+                if (projectProps.containsKey(DockerMachineConfiguration.DOCKER_MACHINE_NAME_PROP)) {
+                    config = new DockerMachineConfiguration(
+                        projectProps.getProperty(DockerMachineConfiguration.DOCKER_MACHINE_NAME_PROP),
+                        projectProps.getProperty(DockerMachineConfiguration.DOCKER_MACHINE_AUTO_CREATE_PROP));
+                }
+            }
+        }
+
+        List<DockerConnectionDetector.DockerHostProvider> ret = new ArrayList<>();
+        ret.add(new DockerMachine(log, config));
+        return ret;
+    }
 
     /**
      * Override this if your mojo doesnt require access to a Docker host (like creating and attaching
@@ -200,17 +329,6 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
      */
     protected boolean isDockerAccessRequired() {
         return true;
-    }
-
-    // Return minimal required version
-    private String validateConfiguration(Logger log) {
-        String apiVersion = this.apiVersion;
-        if (images != null) {
-            for (ImageConfiguration imageConfiguration : images) {
-                apiVersion = EnvUtil.extractLargerVersion(apiVersion,imageConfiguration.validate(log));
-            }
-        }
-        return apiVersion;
     }
 
     /**
@@ -229,44 +347,8 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
      *
      * @return list of image configuration to use
      */
-    protected List<ImageConfiguration> getImages() {
-        List<ImageConfiguration> resolvedImages = resolveImages();
-        List<ImageConfiguration> ret = new ArrayList<>();
-        for (ImageConfiguration imageConfig : resolvedImages) {
-            if (matchesConfiguredImages(this.image, imageConfig)) {
-                ret.add(imageConfig);
-            }
-        }
-        return ret;
-    }
-
-    private List<ImageConfiguration> resolveImages() {
-        List<ImageConfiguration> ret = new ArrayList<>();
-        if (images != null) {
-            for (ImageConfiguration image : images) {
-                ret.addAll(imageConfigResolver.resolve(image, project.getProperties()));
-            }
-            verifyImageNames(ret);
-        }
-        return ret;
-    }
-
-    // Extract authentication information
-    private void verifyImageNames(List<ImageConfiguration> ret) {
-        for (ImageConfiguration config : ret) {
-            if (config.getName() == null) {
-                throw new IllegalArgumentException("Configuration error: <image> must have a non-null <name>");
-            }
-        }
-    }
-
-    // Check if the provided image configuration matches the given
-    protected boolean matchesConfiguredImages(String imageList, ImageConfiguration imageConfig) {
-        if (imageList == null) {
-            return true;
-        }
-        Set<String> imagesAllowed = new HashSet<>(Arrays.asList(imageList.split("\\s*,\\s*")));
-        return imagesAllowed.contains(imageConfig.getName()) || imagesAllowed.contains(imageConfig.getAlias());
+    protected List<ImageConfiguration> getResolvedImages() {
+        return resolvedImages;
     }
 
     // Registry for managed containers
@@ -276,7 +358,7 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
             final String host;
             try {
                 URI uri = new URI(dockerUrl);
-                if (uri.getHost() == null && uri.getScheme().equals("unix")) {
+                if (uri.getHost() == null && (uri.getScheme().equals("unix") || uri.getScheme().equals("npipe"))) {
                     host = "localhost";
                 } else {
                     host = uri.getHost();
@@ -334,31 +416,51 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
     /**
      * Check an image, and, if <code>autoPull</code> is set to true, fetch it. Otherwise if the image
      * is not existent, throw an error
-     *
-     * @param hub access object to lookup an image (if autoPull is enabled)
+     *  @param hub access object to lookup an image (if autoPull is enabled)
      * @param image image name
      * @param registry optional registry which is used if the image itself doesn't have a registry.
      * @param autoPullAlwaysAllowed whether an unconditional autopull is allowed.
-     *
      * @throws DockerAccessException
      * @throws MojoExecutionException
      */
     protected void checkImageWithAutoPull(ServiceHub hub, String image, String registry,
-            boolean autoPullAlwaysAllowed) throws DockerAccessException, MojoExecutionException {
+                                          boolean autoPullAlwaysAllowed) throws DockerAccessException, MojoExecutionException {
         // TODO: further refactoring could be done to avoid referencing the QueryService here
         QueryService queryService = hub.getQueryService();
-        if (!queryService.imageRequiresAutoPull(autoPull, image, autoPullAlwaysAllowed)) {
+        ImagePullCache previouslyPulledCache = getPreviouslyPulledImageCache();
+        if (!queryService.imageRequiresAutoPull(autoPull, image, autoPullAlwaysAllowed, previouslyPulledCache)) {
             return;
         }
 
         DockerAccess docker = hub.getDockerAccess();
         ImageName imageName = new ImageName(image);
+        long time = System.currentTimeMillis();
         docker.pullImage(withLatestIfNoTag(image), prepareAuthConfig(imageName, registry, false), registry);
+        log.info("Pulled %s in %s", imageName.getFullName(), EnvUtil.formatDurationTill(time));
+        updatePreviousPulledImageCache(image);
+
         if (registry != null && !imageName.hasRegistry()) {
             // If coming from a registry which was not contained in the original name, add a tag from the
             // full name with the registry to the short name with no-registry.
             docker.tag(imageName.getFullName(registry), image, false);
         }
+    }
+
+    private void updatePreviousPulledImageCache(String image) {
+        ImagePullCache cache = getPreviouslyPulledImageCache();
+        cache.add(image);
+        session.getUserProperties().setProperty(CONTEXT_KEY_PREVIOUSLY_PULLED, cache.toString());
+    }
+
+    private synchronized ImagePullCache getPreviouslyPulledImageCache() {
+        @SuppressWarnings({ "rawtypes", "unchecked" })
+            Properties userProperties = session.getUserProperties();
+        String pullCacheJson = userProperties.getProperty(CONTEXT_KEY_PREVIOUSLY_PULLED);
+        ImagePullCache cache = new ImagePullCache(pullCacheJson);
+        if (pullCacheJson == null) {
+            userProperties.put(CONTEXT_KEY_PREVIOUSLY_PULLED, cache.toString());
+        }
+        return cache;
     }
 
     // Fetch only latest if no tag is given

@@ -1,39 +1,22 @@
 package io.fabric8.maven.docker.access.hc.unix;
 
-import java.net.InetAddress;
-import java.net.UnknownHostException;
-
-import org.apache.http.config.Registry;
-import org.apache.http.config.RegistryBuilder;
-import org.apache.http.conn.DnsResolver;
+import io.fabric8.maven.docker.access.hc.util.AbstractNativeClientBuilder;
+import io.fabric8.maven.docker.util.Logger;
 import org.apache.http.conn.socket.ConnectionSocketFactory;
-import org.apache.http.impl.client.*;
-import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 
-public class UnixSocketClientBuilder {
+public class UnixSocketClientBuilder extends AbstractNativeClientBuilder {
 
-    public CloseableHttpClient build(String unixSocketPath, int maxConnections) {
-        final HttpClientBuilder httpBuilder = HttpClients.custom();
-        final Registry<ConnectionSocketFactory> registry = buildRegistry(unixSocketPath);
-        final DnsResolver dnsResolver = nullDnsResolver();
-        final PoolingHttpClientConnectionManager manager = new PoolingHttpClientConnectionManager(registry, dnsResolver);
-        manager.setDefaultMaxPerRoute(maxConnections);
-        httpBuilder.setConnectionManager(manager);
-        return httpBuilder.build();
+    public UnixSocketClientBuilder(String unixSocketPath, int maxConnections, Logger log) {
+        super(unixSocketPath, maxConnections, log);
     }
 
-    private Registry<ConnectionSocketFactory> buildRegistry(String path) {
-        final RegistryBuilder<ConnectionSocketFactory> registryBuilder = RegistryBuilder.create();
-        registryBuilder.register("unix", new UnixConnectionSocketFactory(path));
-        return registryBuilder.build();
+    @Override
+    protected ConnectionSocketFactory getConnectionSocketFactory() {
+        return new UnixConnectionSocketFactory(path);
     }
 
-    private  DnsResolver nullDnsResolver() {
-        return new DnsResolver() {
-            @Override
-            public InetAddress[] resolve(final String host) throws UnknownHostException {
-                return new InetAddress[] {null};
-            }
-        };
+    @Override
+    protected String getProtocol() {
+        return "unix";
     }
 }

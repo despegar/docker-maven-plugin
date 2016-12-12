@@ -1,5 +1,5 @@
 package io.fabric8.maven.docker;/*
- * 
+ *
  * Copyright 2014 Roland Huss
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,7 +19,9 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import io.fabric8.maven.docker.access.DockerAccessException;
@@ -28,9 +30,9 @@ import io.fabric8.maven.docker.assembly.AssemblyFiles;
 import io.fabric8.maven.docker.config.ImageConfiguration;
 import io.fabric8.maven.docker.config.WatchImageConfiguration;
 import io.fabric8.maven.docker.config.WatchMode;
+import io.fabric8.maven.docker.service.*;
 import io.fabric8.maven.docker.util.MojoParameters;
 import io.fabric8.maven.docker.util.StartOrderResolver;
-import io.fabric8.maven.docker.service.*;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.plugins.annotations.Mojo;
@@ -54,6 +56,9 @@ import org.codehaus.plexus.util.StringUtils;
 @Mojo(name = "watch")
 public class WatchMojo extends AbstractBuildSupportMojo {
 
+    /**
+     * Watching mode for rebuilding images
+     */
     @Parameter(property = "docker.watchMode", defaultValue = "both")
     private WatchMode watchMode;
 
@@ -68,6 +73,12 @@ public class WatchMojo extends AbstractBuildSupportMojo {
 
     @Parameter(property = "docker.watchPostExec")
     private String watchPostExec;
+
+    /**
+     * Whether to create the customs networks (user-defined bridge networks) before starting automatically
+     */
+    @Parameter(property = "docker.autoCreateCustomNetworks", defaultValue = "false")
+    protected boolean autoCreateCustomNetworks;
 
     // Scheduler
     private ScheduledExecutorService executor;
@@ -84,7 +95,7 @@ public class WatchMojo extends AbstractBuildSupportMojo {
         MojoParameters mojoParameters = createMojoParameters();
 
         try {
-            for (StartOrderResolver.Resolvable resolvable : runService.getImagesConfigsInOrder(queryService, getImages())) {
+            for (StartOrderResolver.Resolvable resolvable : runService.getImagesConfigsInOrder(queryService, getResolvedImages())) {
                 final ImageConfiguration imageConfig = (ImageConfiguration) resolvable;
 
                 String imageId = queryService.getImageId(imageConfig.getName());
@@ -93,12 +104,15 @@ public class WatchMojo extends AbstractBuildSupportMojo {
                 ImageWatcher watcher = new ImageWatcher(imageConfig, imageId, containerId);
                 long interval = watcher.getInterval();
 
+                WatchMode watchMode = watcher.getWatchMode(imageConfig);
+                log.info("Watching " + imageConfig.getName() + (watchMode != null ? " using " + watchMode.getDescription() : ""));
+
                 ArrayList<String> tasks = new ArrayList<>();
 
                 if (imageConfig.getBuildConfiguration() != null &&
                     imageConfig.getBuildConfiguration().getAssemblyConfiguration() != null) {
                     if (watcher.isCopy()) {
-                        String containerBaseDir = imageConfig.getBuildConfiguration().getAssemblyConfiguration().getBasedir();
+                        String containerBaseDir = imageConfig.getBuildConfiguration().getAssemblyConfiguration().getTargetDir();
                         schedule(createCopyWatchTask(hub, watcher, mojoParameters, containerBaseDir),interval);
                         tasks.add("copying artifacts");
                     }
@@ -115,12 +129,12 @@ public class WatchMojo extends AbstractBuildSupportMojo {
                 }
 
                 if (tasks.size() > 0) {
-                    log.info(imageConfig.getDescription() + ": Watch for " + StringUtils.join(tasks.toArray()," and "));
+                    log.info("%s: Watch for %s",imageConfig.getDescription(),StringUtils.join(tasks.toArray()," and "));
                 }
             }
             log.info("Waiting ...");
             if (!keepRunning) {
-                runService.addShutdownHookForStoppingContainers(keepContainer, removeVolumes);
+                runService.addShutdownHookForStoppingContainers(keepContainer, removeVolumes, autoCreateCustomNetworks);
             }
             wait();
         } catch (InterruptedException e) {
@@ -145,14 +159,15 @@ public class WatchMojo extends AbstractBuildSupportMojo {
                 List<AssemblyFiles.Entry> entries = files.getUpdatedEntriesAndRefresh();
                 if (entries != null && entries.size() > 0) {
                     try {
-                        log.info(imageConfig.getDescription() + ": Assembly changed. Copying changed files to container ...");
+                        log.info("%s: Assembly changed. Copying changed files to container ...", imageConfig.getDescription());
 
                         File changedFilesArchive = archiveService.createChangedFilesArchive(entries,files.getAssemblyDirectory(),
                                                                                           imageConfig.getName(),mojoParameters);
                         hub.getDockerAccess().copyArchive(watcher.getContainerId(), changedFilesArchive, containerBaseDir);
                         callPostExec(hub.getRunService(), watcher);
                     } catch (MojoExecutionException | IOException e) {
-                        log.error(imageConfig.getDescription() + ": Error when copying files to container " + watcher.getContainerId() + ": " + e);
+                        log.error("%s: Error when copying files to container %s: %s",
+                                  imageConfig.getDescription(),watcher.getContainerId(),e.getMessage());
                     }
                 }
             }
@@ -168,9 +183,13 @@ public class WatchMojo extends AbstractBuildSupportMojo {
 
     private Runnable createBuildWatchTask(final ServiceHub hub, final ImageWatcher watcher,
                                           final MojoParameters mojoParameters, final boolean doRestart)
-            throws MojoExecutionException {
+        throws MojoExecutionException {
         final ImageConfiguration imageConfig = watcher.getImageConfiguration();
         final AssemblyFiles files = hub.getArchiveService().getAssemblyFiles(imageConfig, mojoParameters);
+        if (files.isEmpty()) {
+            log.error("No assembly files for %s. Are you sure you invoked together with the `package` goal?", imageConfig.getDescription());
+            throw new MojoExecutionException("No files to watch found for " + imageConfig);
+        }
 
         return new Runnable() {
             @Override
@@ -178,7 +197,7 @@ public class WatchMojo extends AbstractBuildSupportMojo {
                 List<AssemblyFiles.Entry> entries = files.getUpdatedEntriesAndRefresh();
                 if (entries != null && entries.size() > 0) {
                     try {
-                        log.info(imageConfig.getDescription() + ": Assembly changed. Rebuild ...");
+                        log.info("%s: Assembly changed. Rebuild ...", imageConfig.getDescription());
 
                         buildImage(hub, imageConfig);
 
@@ -189,7 +208,7 @@ public class WatchMojo extends AbstractBuildSupportMojo {
                         }
                         callPostGoal(hub, watcher);
                     } catch (MojoExecutionException | MojoFailureException | IOException e) {
-                        log.error(imageConfig.getDescription() + ": Error when rebuilding " + e);
+                        log.error("%s: Error when rebuilding - %s",imageConfig.getDescription(),e);
                     }
                 }
             }
@@ -214,17 +233,17 @@ public class WatchMojo extends AbstractBuildSupportMojo {
                         callPostGoal(hub, watcher);
                     }
                 } catch (DockerAccessException | MojoFailureException | MojoExecutionException e) {
-                    log.warn(watcher.getImageConfiguration().getDescription() + ": Error when restarting image " + e);
+                    log.warn("%s: Error when restarting image - %s",watcher.getImageConfiguration().getDescription(),e);
                 }
             }
         };
     }
 
-    private void restartContainer(ServiceHub hub, ImageWatcher watcher) throws DockerAccessException {
+    protected void restartContainer(ServiceHub hub, ImageWatcher watcher) throws DockerAccessException, MojoExecutionException, MojoFailureException {
         // Stop old one
         RunService runService = hub.getRunService();
         ImageConfiguration imageConfig = watcher.getImageConfiguration();
-        PortMapping mappedPorts = runService.getPortMapping(imageConfig.getRunConfiguration(), project.getProperties());
+        PortMapping mappedPorts = runService.createPortMapping(imageConfig.getRunConfiguration(), project.getProperties());
         String id = watcher.getContainerId();
 
         String optionalPreStop = getPreStopCommand(imageConfig);
@@ -258,7 +277,7 @@ public class WatchMojo extends AbstractBuildSupportMojo {
     // ===============================================================================================================
 
     // Helper class for holding state and parameter when watching images
-    private class ImageWatcher {
+    public class ImageWatcher {
 
         private final WatchMode mode;
         private final AtomicReference<String> imageIdRef, containerIdRef;

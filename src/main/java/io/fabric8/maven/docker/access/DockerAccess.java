@@ -1,13 +1,16 @@
 package io.fabric8.maven.docker.access;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 
 import io.fabric8.maven.docker.access.log.LogCallback;
 import io.fabric8.maven.docker.access.log.LogGetHandle;
 import io.fabric8.maven.docker.config.Arguments;
 import io.fabric8.maven.docker.log.LogOutputSpec;
 import io.fabric8.maven.docker.model.Container;
+import io.fabric8.maven.docker.model.Network;
 
 /**
  * Access to the <a href="http://docs.docker.io/en/latest/reference/api/docker_remote_api/">Docker API</a> which
@@ -19,13 +22,21 @@ import io.fabric8.maven.docker.model.Container;
 public interface DockerAccess {
 
     /**
-     * Inspect a container
-     * 
-     * @param containerId container id
-     * @return <code>ContainerDetails<code> representing the container
+     * Get the API version of the running server
+     *
+     * @return api version in the form "1.24"
+     * @throws DockerAccessException if the api version could not be obtained
+     */
+    String getServerApiVersion() throws DockerAccessException;
+
+    /**
+     * Get a container
+     *
+     * @param containerIdOrName container id or name
+     * @return <code>ContainerDetails<code> representing the container or null if none could be found
      * @throws DockerAccessException if the container could not be inspected
      */
-    Container inspectContainer(String containerId) throws DockerAccessException;
+    Container getContainer(String containerIdOrName) throws DockerAccessException;
 
     /**
      * Check whether the given name exists as image at the docker daemon
@@ -44,13 +55,14 @@ public interface DockerAccess {
     String getImageId(String name) throws DockerAccessException;
 
     /**
-     * List containers
-     * 
-     * @param limit limit of containers to list
-     * @return list of <code>Container<code> objects
-     * @throws DockerAccessException if the containers could not be listed
+     * Get all containers which are build from an image. By default only the last containers are considered but this
+     * can be tuned with a global parameters.
+     *
+     * @param image for which its container are looked up
+     * @return list of <code>Container</code> objects or an empty list if none is found
+     * @throws DockerAccessException if the request fails
      */
-    List<Container> listContainers(int limit) throws DockerAccessException;
+    List<Container> getContainersForImage(String image) throws DockerAccessException;
 
     /**
      * Starts a previously set up exec instance id.
@@ -106,7 +118,7 @@ public interface DockerAccess {
      * @param containerId container to copy into
      * @param archive local archive to copy into
      * @param targetPath target path to use
-     * @throws DockerAccessException
+     * @throws DockerAccessException if the archive could not be copied
      */
     void copyArchive(String containerId, File archive, String targetPath)
             throws DockerAccessException;
@@ -158,20 +170,23 @@ public interface DockerAccess {
      * @param image image name to push
      * @param authConfig authentication configuration
      * @param registry optional registry to which the image should be pushed.
+     * @param retries optional number of times the push should be retried on a 500 error
      * @throws DockerAccessException in case pushing fails
      */
-    void pushImage(String image, AuthConfig authConfig, String registry) throws DockerAccessException;
+    void pushImage(String image, AuthConfig authConfig, String registry, int retries) throws DockerAccessException;
 
     /**
      * Create an docker image from a given archive
      *
      * @param image name of the image to build or <code>null</code> if none should be used
      * @param dockerArchive from which the docker image should be build
+     * @param dockerfileName filename of the Dockerfile within the archive or <code>null</code> for the default Dockerfile
      * @param forceRemove whether to remove intermediate containers
      * @param noCache whether to use cache when building the image
-     * @throws DockerAccessException if docker host reports an error during building of an image
+     * @param buildArgs buildArgs to add then building the image. Can be <code>null</code> for no build args.    @throws DockerAccessException if docker host reports an error during building of an image
      */
-    void buildImage(String image, File dockerArchive, boolean forceRemove, boolean noCache) throws DockerAccessException;
+    void buildImage(String image, File dockerArchive, String dockerfileName, boolean forceRemove, boolean noCache,
+                    Map<String, String> buildArgs) throws DockerAccessException;
 
     /**
      * Alias an image in the repository with a complete new name. (Note that this maps to a Docker Remote API 'tag'
@@ -193,6 +208,33 @@ public interface DockerAccess {
      * @throws DockerAccessException if an image cannot be removed
      */
     boolean removeImage(String image, boolean ... force) throws DockerAccessException;
+
+    /**
+     * List all networks
+     *
+     * @return list of <code>Network<code> objects
+     * @throws DockerAccessException if the networks could not be listed
+     */
+    List<Network> listNetworks() throws DockerAccessException;
+
+    /**
+     * Create a custom network from the given configuration.
+     *
+     * @param configuration network configuration
+     * @throws DockerAccessException if the container could not be created.
+     */
+
+    String createNetwork(NetworkCreateConfig configuration) throws DockerAccessException;
+
+    /**
+     * Remove a custom network
+     *
+     * @param networkId network to remove
+     * @return true if an network was removed, false if none was removed
+     * @throws DockerAccessException if an image cannot be removed
+     */
+    boolean removeNetwork(String networkId) throws DockerAccessException;
+
 
     /**
      * Lifecycle method for this access class which must be called before any other method is called.

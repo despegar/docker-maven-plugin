@@ -5,6 +5,8 @@ import java.net.URLEncoder;
 import java.util.*;
 
 import io.fabric8.maven.docker.util.ImageName;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 public final class UrlBuilder {
 
@@ -17,13 +19,20 @@ public final class UrlBuilder {
         this.apiVersion = apiVersion;
         this.baseUrl = stripSlash(baseUrl);
     }
-    
-    public String buildImage(String image, boolean forceRemove, boolean noCache) {
-        return u("build")
-                .p("t",image)
-                .p(forceRemove ? "forcerm" : "rm", true)
-                .p("nocache", noCache)
-                .build();
+
+    public String buildImage(String image, String dockerfileName, boolean forceRemove, boolean noCache, Map<String, String> buildArgs) {
+
+        Builder urlBuilder = u("build")
+            .p("t", image)
+            .p(forceRemove ? "forcerm" : "rm", true)
+            .p("nocache", noCache);
+        if (buildArgs != null && !buildArgs.isEmpty()) {
+            urlBuilder.p("buildargs", new JSONObject(buildArgs).toString());
+        }
+        if (dockerfileName != null) {
+            urlBuilder.p("dockerfile",dockerfileName);
+        }
+        return urlBuilder.build();
     }
 
     public String copyArchive(String containerId, String targetPath) {
@@ -45,11 +54,15 @@ public final class UrlBuilder {
                 .p("follow", follow)
                 .build();
     }
-    
+
     public String createContainer(String name) {
         return u("containers/create")
                 .p("name", name)
                 .build();
+    }
+
+    public String version() {
+        return String.format("%s/version", baseUrl);
     }
 
     public String deleteImage(String name, boolean force) {
@@ -62,11 +75,22 @@ public final class UrlBuilder {
         return u("containers/%s/json", containerId)
                 .build();
     }
-    
-    public String listContainers(int limit) {
-        return u("containers/json")
-                .p("limit", limit)
-                .build();
+
+    public String listContainers(String ... filter) {
+        Builder builder = u("containers/json");
+        if (filter.length > 0) {
+            if (filter.length % 2 != 0) {
+                throw new IllegalArgumentException("Filters must be given as key value pairs and not " +Arrays.asList(filter));
+            }
+            JSONObject filters = new JSONObject();
+            for (int i = 0; i < filter.length; i +=2) {
+                JSONArray value = new JSONArray();
+                value.put(filter[i+1]);
+                filters.put(filter[i],value);
+            }
+            builder.p("filters",filters.toString());
+        }
+        return builder.build();
     }
 
     public String pullImage(ImageName name, String registry) {
@@ -121,6 +145,25 @@ public final class UrlBuilder {
                 .build();
     }
 
+    public String listNetworks() {
+        return u("networks")
+                .build();
+    }
+
+    public String createNetwork() {
+        return u("networks/create")
+                .build();
+    }
+
+    public String removeNetwork(String id) {
+        return u("networks/%s", id)
+                .build();
+    }
+
+    public String getBaseUrl() {
+        return baseUrl;
+    }
+
     // ============================================================================
 
     @SuppressWarnings("deprecation")
@@ -144,7 +187,7 @@ public final class UrlBuilder {
 
     // Entry point for builder
     private Builder u(String format, String ... args) {
-        return new Builder(createUrl(String.format(format,encodeArgs(args))));
+        return new Builder(createUrl(String.format(format, (Object[]) encodeArgs(args))));
     }
 
     private String[] encodeArgs(String[] args) {

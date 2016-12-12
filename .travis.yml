@@ -1,6 +1,9 @@
 language: java
 jdk:
-  - oraclejdk7
+  - oraclejdk8
+after_script:
+  - "[[ $TRAVIS_PULL_REQUEST == false ]] && mvn -Psonarqube package sonar:sonar -Dsonar.host.url=https://sonarqube.com -Dsonar.login=${SONARQUBE_TOKEN}"
+
 notifications:
   webhooks:
     urls:

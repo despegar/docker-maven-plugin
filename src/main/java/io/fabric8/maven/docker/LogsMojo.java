@@ -6,6 +6,8 @@ import io.fabric8.maven.docker.access.DockerAccessException;
 import io.fabric8.maven.docker.model.Container;
 import io.fabric8.maven.docker.service.ServiceHub;
 import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.plugins.annotations.Execute;
+import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
 import io.fabric8.maven.docker.config.ImageConfiguration;
@@ -42,7 +44,7 @@ public class LogsMojo extends AbstractDockerMojo {
         QueryService queryService = hub.getQueryService();
         LogDispatcher logDispatcher = getLogDispatcher(hub);
 
-        for (ImageConfiguration image : getImages()) {
+        for (ImageConfiguration image : getResolvedImages()) {
             String imageName = image.getName();
             if (logAll) {
                 for (Container container : queryService.getContainersForImage(imageName)) {
@@ -50,7 +52,9 @@ public class LogsMojo extends AbstractDockerMojo {
                 }
             } else {
                 Container container = queryService.getLatestContainerForImage(imageName);
-                doLogging(logDispatcher, image, container.getId());
+                if (container != null) {
+                    doLogging(logDispatcher, image, container.getId());
+                }
             }
         }
         if (follow) {

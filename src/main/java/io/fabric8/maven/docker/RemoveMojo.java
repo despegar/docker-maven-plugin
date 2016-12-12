@@ -1,5 +1,5 @@
 package io.fabric8.maven.docker;/*
- * 
+ *
  * Copyright 2014 Roland Huss
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +19,8 @@ import io.fabric8.maven.docker.config.ImageConfiguration;
 import io.fabric8.maven.docker.access.DockerAccessException;
 import io.fabric8.maven.docker.service.QueryService;
 import io.fabric8.maven.docker.service.ServiceHub;
+
+import org.apache.maven.plugins.annotations.Execute;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
@@ -43,17 +45,17 @@ public class RemoveMojo extends AbstractDockerMojo {
     // Should all configured images should be removed?
     @Parameter(property = "docker.removeAll", defaultValue = "false")
     private boolean removeAll;
-    
+
     @Override
     protected void executeInternal(ServiceHub hub) throws DockerAccessException {
         QueryService queryService = hub.getQueryService();
-        
-        for (ImageConfiguration image : getImages()) {
+
+        for (ImageConfiguration image : getResolvedImages()) {
             String name = image.getName();
             if (removeAll || image.isDataImage()) {
                 if (queryService.hasImage(name)) {
                     if (hub.getDockerAccess().removeImage(name,true)) {
-                        log.info(image.getDescription() + ": Remove");
+                        log.info("%s: Remove",image.getDescription());
                     }
                 }
             }

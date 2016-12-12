@@ -2,28 +2,27 @@ package integration;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.Map;
-import java.util.Properties;
+import java.util.*;
 
 import com.google.common.collect.Lists;
-import edu.emory.mathcs.backport.java.util.Arrays;
-import io.fabric8.maven.docker.access.*;
-import io.fabric8.maven.docker.util.AnsiLogger;
-import io.fabric8.maven.docker.util.EnvUtil;
-import io.fabric8.maven.docker.util.Logger;
-import org.apache.maven.plugin.logging.SystemStreamLog;
 import io.fabric8.maven.docker.AbstractDockerMojo;
+import io.fabric8.maven.docker.access.*;
 import io.fabric8.maven.docker.access.hc.DockerAccessWithHcClient;
 import io.fabric8.maven.docker.config.Arguments;
+import io.fabric8.maven.docker.config.DockerMachineConfiguration;
 import io.fabric8.maven.docker.model.Container.PortBinding;
-import org.junit.*;
+import io.fabric8.maven.docker.util.AnsiLogger;
+import io.fabric8.maven.docker.util.Logger;
+import org.apache.maven.plugin.logging.SystemStreamLog;
+import org.junit.Before;
+import org.junit.Ignore;
+import org.junit.Test;
 
-import static org.hamcrest.CoreMatchers.is;
 import static org.junit.Assert.*;
 
 /*
  * if run from your ide, this test assumes you have configured the runner w/ the appropriate env variables
- * 
+ *
  * it also assumes that 'removeImage' does what it's supposed to do as it's used in test setup.
  */
 @Ignore
@@ -38,8 +37,16 @@ public class DockerAccessIT {
     private String containerId;
     private final DockerAccessWithHcClient dockerClient;
 
-    public DockerAccessIT() {
-        this.dockerClient = createClient(EnvUtil.extractUrl(null), new AnsiLogger(new SystemStreamLog(), true, true));
+    public DockerAccessIT() throws IOException {
+        AnsiLogger logger = new AnsiLogger(new SystemStreamLog(), true, true);
+        String url = createDockerConnectionDetector(logger).detectConnectionParameter(null,null).getUrl();
+        this.dockerClient = createClient(url, logger);
+    }
+
+    private DockerConnectionDetector createDockerConnectionDetector(Logger logger) {
+        DockerMachineConfiguration machine = new DockerMachineConfiguration("default","false");
+        return new DockerConnectionDetector(
+            Collections.<DockerConnectionDetector.DockerHostProvider>singletonList(new DockerMachine(logger, machine)));
     }
 
     @Before
@@ -53,14 +60,14 @@ public class DockerAccessIT {
     @Ignore
     public void testBuildImage() throws DockerAccessException {
         File file = new File("src/test/resources/integration/busybox-test.tar");
-        dockerClient.buildImage(IMAGE_TAG, file, false, false);
+        dockerClient.buildImage(IMAGE_TAG, file, null, false, false, Collections.<String, String>emptyMap());
         assertTrue(hasImage(IMAGE_TAG));
 
         testRemoveImage(IMAGE_TAG);
     }
 
     @Test
-    public void testPullStartStopRemove() throws DockerAccessException {
+    public void testPullStartStopRemove() throws DockerAccessException, InterruptedException {
         testDoesNotHave();
 
         try {
@@ -71,6 +78,7 @@ public class DockerAccessIT {
             testExecContainer();
             testQueryPortMapping();
             testStopContainer();
+            Thread.sleep(2000);
             testRemoveContainer();
         } finally {
             testRemoveImage(IMAGE);
@@ -79,22 +87,24 @@ public class DockerAccessIT {
 
     private DockerAccessWithHcClient createClient(String baseUrl, Logger logger) {
         try {
-            return new DockerAccessWithHcClient(AbstractDockerMojo.API_VERSION, baseUrl, EnvUtil.getCertPath(null), 20, logger);
+            String certPath = createDockerConnectionDetector(logger).detectConnectionParameter(null,null).getCertPath();
+            return new DockerAccessWithHcClient("v" + AbstractDockerMojo.API_VERSION, baseUrl, certPath, 20, logger);
         } catch (@SuppressWarnings("unused") IOException e) {
             // not using ssl, so not going to happen
+            logger.error(e.getMessage());
             throw new RuntimeException();
         }
     }
 
     private void testCreateContainer() throws DockerAccessException {
-        PortMapping portMapping = new PortMapping(Arrays.asList(new Object[] {PORT + ":" + PORT }), new Properties());
+        PortMapping portMapping = new PortMapping(Arrays.asList(new String[] {PORT + ":" + PORT }), new Properties());
         ContainerHostConfig hostConfig = new ContainerHostConfig().portBindings(portMapping);
         ContainerCreateConfig createConfig = new ContainerCreateConfig(IMAGE).command(new Arguments("ping google.com")).hostConfig(hostConfig);
 
         containerId = dockerClient.createContainer(createConfig, CONTAINER_NAME);
         assertNotNull(containerId);
 
-        String name = dockerClient.inspectContainer(containerId).getName();
+        String name = dockerClient.getContainer(containerId).getName();
         assertEquals(CONTAINER_NAME, name);
     }
 
@@ -108,7 +118,7 @@ public class DockerAccessIT {
     }
 
     private void testQueryPortMapping() throws DockerAccessException {
-        Map<String, PortBinding> portMap = dockerClient.inspectContainer(containerId).getPortBindings();
+        Map<String, PortBinding> portMap = dockerClient.getContainer(containerId).getPortBindings();
         assertEquals(5677, portMap.values().iterator().next().getHostPort().intValue());
     }
 
@@ -123,7 +133,7 @@ public class DockerAccessIT {
 
     private void testStartContainer() throws DockerAccessException {
         dockerClient.startContainer(containerId);
-        assertTrue(dockerClient.inspectContainer(containerId).isRunning());
+        assertTrue(dockerClient.getContainer(containerId).isRunning());
     }
 
     private void testExecContainer() throws DockerAccessException {
@@ -135,7 +145,7 @@ public class DockerAccessIT {
 
     private void testStopContainer() throws DockerAccessException {
         dockerClient.stopContainer(containerId, 0);
-        assertFalse(dockerClient.inspectContainer(containerId).isRunning());
+        assertFalse(dockerClient.getContainer(containerId).isRunning());
     }
 
     private void testTagImage() throws DockerAccessException {

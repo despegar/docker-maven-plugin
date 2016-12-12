@@ -1,5 +1,5 @@
 package io.fabric8.maven.docker.config;/*
- * 
+ *
  * Copyright 2014 Roland Huss
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,22 +15,22 @@ package io.fabric8.maven.docker.config;/*
  * limitations under the License.
  */
 
+import java.io.Serializable;
+
+import org.apache.maven.plugins.annotations.Parameter;
+
 /**
 * @author roland
 * @since 08/12/14
 */
-public class RestartPolicy {
+public class RestartPolicy implements Serializable {
 
     public static final RestartPolicy DEFAULT = new RestartPolicy();
 
-    /**
-     * @parameter
-     */
+    @Parameter
     private String name;
 
-    /**
-     * @parameter
-     */
+    @Parameter
     private int retry;
 
     public RestartPolicy() {};

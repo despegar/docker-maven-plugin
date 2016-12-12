@@ -1,118 +1,154 @@
 package io.fabric8.maven.docker.config;
 
+import java.io.Serializable;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
+import io.fabric8.maven.docker.util.DeepCopy;
+import org.apache.maven.plugins.annotations.Parameter;
+
+import io.fabric8.maven.docker.util.EnvUtil;
 
 /**
  * @author roland
  * @since 02.09.14
  */
-public class RunImageConfiguration {
+public class RunImageConfiguration implements Serializable {
 
     static final RunImageConfiguration DEFAULT = new RunImageConfiguration();
-    
-    // Environment variables to set when starting the container. key: variable name, value: env value
-    /** @parameter */
+
+    /**
+     * Environment variables to set when starting the container. key: variable name, value: env value
+     */
+    @Parameter
     private Map<String, String> env;
 
-    /** @parameter */
+    @Parameter
     private Map<String,String> labels;
 
     // Path to a property file holding environment variables
-    /** @parameter */
+    @Parameter
     private String envPropertyFile;
 
     // Command to execute in container
-    /** @parameter */
+    @Parameter
     private Arguments cmd;
 
     // container domain name
-    /** @parameter */
+    @Parameter
     private String domainname;
 
+    // container domain name
+    @Parameter
+    private List<String> dependsOn;
+
     // container entry point
-    /** @parameter */
+    @Parameter
     private Arguments entrypoint;
 
     // container hostname
-    /** @parameter */
+    @Parameter
     private String hostname;
 
     // container user
-    /** @parameter */
+    @Parameter
     private String user;
 
     // working directory
-    /** @parameter */
+    @Parameter
     private String workingDir;
 
-    // memory in bytes
+    // Size of /dev/shm in bytes
     /** @parameter */
+    private Long shmSize;
+
+    // memory in bytes
+    @Parameter
     private Long memory;
 
     // total memory (swap + ram) in bytes, -1 to disable
-    /** @parameter */
+    @Parameter
     private Long memorySwap;
 
     // Path to a file where the dynamically mapped properties are written to
-    /** @parameter */
+    @Parameter
     private String portPropertyFile;
 
-    /** @parameter */
+    // For simple network setups. For complex stuff use "network"
+    @Parameter
     private String net;
 
-    /** @parameter */
+    @Parameter
+    private NetworkConfig network;
+
+    @Parameter
     private List<String> dns;
 
-    /** @parameter */
+    @Parameter
     private List<String> dnsSearch;
 
-    /** @parameter */
+    @Parameter
     private List<String> capAdd;
 
-    /** @parameter */
+    @Parameter
     private List<String> capDrop;
 
-    /** @parameter */
+    @Parameter
+    private List<String> securityOpts;
+
+    @Parameter
     private Boolean privileged;
 
-    /** @parameter */
+    @Parameter
     private List<String> extraHosts;
 
     // Port mapping. Can contain symbolic names in which case dynamic
     // ports are used
-    /** @parameter */
+    @Parameter
     private List<String> ports;
 
-    /** @parameter */
+    @Parameter
     private NamingStrategy namingStrategy;
 
+    /**
+     * Property key part used to expose the container ip when running.
+     */
+    @Parameter
+    private String exposedPropertyKey;
+
     // Mount volumes from the given image's started containers
-    /** @parameter */
+    @Parameter
     private VolumeConfiguration volumes;
 
     // Links to other container started
-    /** @parameter */
+    @Parameter
     private List<String> links;
 
     // Configuration for how to wait during startup of the container
-    /** @parameter */
+    @Parameter
     private WaitConfiguration wait;
 
-    /** @parameter */
+    // Mountpath for tmps
+    @Parameter
+    private List<String> tmpfs;
+
+    @Parameter
     private LogConfiguration log;
-    
-    /** @parameter */
+
+    @Parameter
     private RestartPolicy restartPolicy;
 
-    /** @parameter */
+    @Parameter
+    private List<UlimitConfig> ulimits;
+
+    @Parameter
     private boolean skip = false;
-    
+
+
     public RunImageConfiguration() { }
 
-    public String validate() {
+    public String initAndValidate() {
         if (entrypoint != null) {
             entrypoint.validate();
         }
@@ -121,8 +157,8 @@ public class RunImageConfiguration {
         }
 
         // Custom networks are available since API 1.21 (Docker 1.9)
-        NetworkingMode mode = getNetworkingMode();
-        if (mode.isCustomNetwork()) {
+        NetworkConfig config = getNetworkingConfig();
+        if (config != null && config.isCustomNetwork()) {
             return "1.21";
         }
 
@@ -153,8 +189,16 @@ public class RunImageConfiguration {
         return domainname;
     }
 
+    public List<String> getDependsOn() {
+        return dependsOn;
+    }
+
     public String getUser() {
         return user;
+    }
+
+    public Long getShmSize() {
+        return shmSize;
     }
 
     public Long getMemory() {
@@ -197,12 +241,22 @@ public class RunImageConfiguration {
         return capDrop;
     }
 
+    public List<String> getSecurityOpts() {
+        return securityOpts;
+    }
+
     public List<String> getDns() {
         return dns;
     }
 
-    public NetworkingMode getNetworkingMode() {
-        return new NetworkingMode(net);
+    public NetworkConfig getNetworkingConfig() {
+        if (network != null) {
+            return network;
+        } else if (net != null) {
+            return new NetworkConfig(net);
+        } else {
+            return new NetworkConfig();
+        }
     }
 
     public List<String> getDnsSearch() {
@@ -212,25 +266,43 @@ public class RunImageConfiguration {
     public List<String> getExtraHosts() {
         return extraHosts;
     }
-    
+
     public VolumeConfiguration getVolumeConfiguration() {
         return volumes;
     }
 
     public List<String> getLinks() {
-        return links;
+        return EnvUtil.splitAtCommasAndTrim(links);
+    }
+
+    public List<UlimitConfig> getUlimits() {
+        return ulimits;
+    }
+
+    public List<String> getTmpfs() {
+        return tmpfs;
     }
 
     // Naming scheme for how to name container
     public enum NamingStrategy {
-        none,  // No extra naming
-        alias  // Use the alias as defined in the configuration
+        /**
+         * No extra naming
+         */
+        none,
+        /**
+         * Use the alias as defined in the configuration
+         */
+        alias
     }
 
     public NamingStrategy getNamingStrategy() {
         return namingStrategy == null ? NamingStrategy.none : namingStrategy;
     }
-    
+
+    public String getExposedPropertyKey() {
+        return exposedPropertyKey;
+    }
+
     public Boolean getPrivileged() {
         return privileged;
     }
@@ -242,12 +314,24 @@ public class RunImageConfiguration {
     public boolean skip() {
         return skip;
     }
-    
+
     // ======================================================================================
 
     public static class Builder {
 
-        private RunImageConfiguration config = new RunImageConfiguration();
+        public Builder(RunImageConfiguration config) {
+            if (config == null) {
+                this.config = new RunImageConfiguration();
+            } else {
+                this.config = DeepCopy.copy(config);
+            }
+        }
+
+        public Builder() {
+            this(null);
+        }
+
+        private RunImageConfiguration config;
 
         public Builder env(Map<String, String> env) {
             config.env = env;
@@ -266,7 +350,14 @@ public class RunImageConfiguration {
         }
 
         public Builder cmd(String cmd) {
-            config.cmd = new Arguments(cmd);
+            if (cmd != null) {
+                config.cmd = new Arguments(cmd);
+            }
+            return this;
+        }
+
+        public Builder cmd(Arguments args) {
+            config.cmd = args;
             return this;
         }
 
@@ -276,7 +367,14 @@ public class RunImageConfiguration {
         }
 
         public Builder entrypoint(String entrypoint) {
-            config.entrypoint = new Arguments(entrypoint);
+            if (entrypoint != null) {
+                config.entrypoint = new Arguments(entrypoint);
+            }
+            return this;
+        }
+
+        public Builder entrypoint(Arguments args) {
+            config.entrypoint = args;
             return this;
         }
 
@@ -300,6 +398,11 @@ public class RunImageConfiguration {
             return this;
         }
 
+        public Builder shmSize(Long shmSize) {
+            config.shmSize = shmSize;
+            return this;
+        }
+
         public Builder memory(Long memory) {
             config.memory = memory;
             return this;
@@ -320,8 +423,23 @@ public class RunImageConfiguration {
             return this;
         }
 
+        public Builder securityOpts(List<String> securityOpts) {
+            config.securityOpts = securityOpts;
+            return this;
+        }
+
         public Builder net(String net) {
             config.net = net;
+            return this;
+        }
+
+        public Builder network(NetworkConfig networkConfig) {
+            config.network = networkConfig;
+            return this;
+        }
+
+        public Builder dependsOn(List<String> dependsOn) {
+            config.dependsOn = dependsOn;
             return this;
         }
 
@@ -340,6 +458,11 @@ public class RunImageConfiguration {
             return this;
         }
 
+        public Builder ulimits(List<UlimitConfig> ulimits) {
+            config.ulimits = ulimits;
+            return this;
+        }
+
         public Builder ports(List<String> ports) {
             config.ports = ports;
             return this;
@@ -355,6 +478,11 @@ public class RunImageConfiguration {
             return this;
         }
 
+        public Builder tmpfs(List<String> tmpfs) {
+            config.tmpfs = tmpfs;
+            return this;
+        }
+
         public Builder wait(WaitConfiguration wait) {
             config.wait = wait;
             return this;
@@ -365,11 +493,20 @@ public class RunImageConfiguration {
             return this;
         }
 
-
         public Builder namingStrategy(String namingStrategy) {
             config.namingStrategy = namingStrategy == null ?
                     NamingStrategy.none :
                     NamingStrategy.valueOf(namingStrategy.toLowerCase());
+            return this;
+        }
+
+        public Builder namingStrategy(NamingStrategy namingStrategy) {
+            config.namingStrategy = namingStrategy;
+            return this;
+        }
+
+        public Builder exposedPropertyKey(String key) {
+            config.exposedPropertyKey = key;
             return this;
         }
 
@@ -394,5 +531,4 @@ public class RunImageConfiguration {
             return config;
         }
     }
-
 }

@@ -1,6 +1,7 @@
-package io.fabric8.maven.docker;/*
- * 
- * Copyright 2015 Roland Huss
+package io.fabric8.maven.docker;
+/*
+ *
+ * Copyright 2016 Roland Huss
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,56 +16,15 @@ package io.fabric8.maven.docker;/*
  * limitations under the License.
  */
 
-import java.io.File;
-
-import io.fabric8.maven.docker.config.BuildImageConfiguration;
-import io.fabric8.maven.docker.util.MojoParameters;
-import io.fabric8.maven.docker.access.DockerAccessException;
-import io.fabric8.maven.docker.config.ImageConfiguration;
-import io.fabric8.maven.docker.service.ServiceHub;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugins.annotations.*;
-import org.apache.maven.project.MavenProjectHelper;
+import org.apache.maven.plugins.annotations.Execute;
+import org.apache.maven.plugins.annotations.LifecyclePhase;
+import org.apache.maven.plugins.annotations.Mojo;
 
 /**
- * Mojo for attaching one more source docker tar file to an artifact.
- *
+ * Forking version of mojo for generating sources
  * @author roland
- * @since 25/10/15
+ * @since 26/10/16
  */
-@Mojo(name = "source", defaultPhase = LifecyclePhase.GENERATE_SOURCES)
-@Execute(phase = LifecyclePhase.GENERATE_SOURCES)
-public class SourceMojo extends  AbstractBuildSupportMojo {
-
-    @Component
-    private MavenProjectHelper projectHelper;
-
-    @Override
-    protected void executeInternal(ServiceHub hub) throws DockerAccessException, MojoExecutionException {
-        MojoParameters params = createMojoParameters();
-        for (ImageConfiguration imageConfig : getImages()) {
-            BuildImageConfiguration buildConfig = imageConfig.getBuildConfiguration();
-            if (buildConfig != null) {
-                if (buildConfig.skip()) {
-                    log.info(imageConfig.getDescription() + ": Skipped creating source");
-                } else {
-                    File dockerTar =
-                            hub.getArchiveService().createDockerBuildArchive(imageConfig, params);
-                    String alias = imageConfig.getAlias();
-                    if (alias == null) {
-                        throw new IllegalArgumentException(
-                                "Image " + imageConfig.getDescription() + " must have an 'alias' configured to be " +
-                                "used as a classifier for attaching a docker build tar as source to the maven build");
-                    }
-                    projectHelper.attachArtifact(project, buildConfig.getCompression().getFileSuffix(),"docker-" + alias, dockerTar);
-                }
-            }
-        }
-    }
-
-    @Override
-    protected boolean isDockerAccessRequired() {
-        // dont need a running docker host for creating the docker tar
-        return false;
-    }
-}
+@Mojo(name = "source", defaultPhase = LifecyclePhase.PACKAGE)
+@Execute(phase = LifecyclePhase.PACKAGE)
+public class SourceMojo extends SourceMojoNoFork { }

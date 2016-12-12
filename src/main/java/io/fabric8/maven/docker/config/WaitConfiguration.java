@@ -1,52 +1,41 @@
 package io.fabric8.maven.docker.config;
 
+import java.io.Serializable;
 import java.util.List;
+
+import org.apache.maven.plugins.annotations.Parameter;
 
 /**
  * @author roland
  * @since 12.10.14
  */
-public class WaitConfiguration {
+public class WaitConfiguration implements Serializable {
 
-    /**
-     * @parameter
-     */
+    @Parameter
     private int time;
 
     /**
-     * @parameter
-     * @deprecated Use <http><url></url></http> instead
+     * @deprecated Use &lt;http&gt;&lturl&gt;&lt;/url&gt;&lt;/http&gt; instead
      */
+    @Parameter
     private String url;
 
-    /**
-     * @parameter
-     */
+    @Parameter
     private HttpConfiguration http;
 
-    /**
-     * @parameter
-     */
+    @Parameter
     private ExecConfiguration exec;
 
-    /**
-     * @parameter
-     */
+    @Parameter
     private TcpConfiguration tcp;
 
-    /**
-     * @parameter
-     */
+    @Parameter
     private String log;
 
-    /**
-     * @parameter
-     */
+    @Parameter
     private int shutdown;
 
-    /**
-     * @parameter
-     */
+    @Parameter
     private int kill;
 
     public WaitConfiguration() {}
@@ -103,6 +92,7 @@ public class WaitConfiguration {
         private String postStart;
         private List<Integer> tcpPorts;
         private String tcpHost;
+        private TcpConfigMode tcpMode;
 
         public Builder time(int time) {
             this.time = time;
@@ -139,20 +129,32 @@ public class WaitConfiguration {
             return this;
         }
 
-        public Builder tcpPorts(List<Integer> tcpPorts)
-        {
+        public Builder tcpPorts(List<Integer> tcpPorts) {
             this.tcpPorts = tcpPorts;
             return this;
         }
 
-        public Builder tcpHost(String tcpHost)
-        {
+        public Builder tcpHost(String tcpHost) {
             this.tcpHost = tcpHost;
             return this;
         }
 
+        public Builder tcpMode(String tcpMode) {
+            if (tcpMode != null) {
+                this.tcpMode = TcpConfigMode.valueOf(tcpMode.toLowerCase());
+            }
+            return this;
+        }
+
+
         public WaitConfiguration build() {
-            return new WaitConfiguration(time, new ExecConfiguration(postStart, preStop), new HttpConfiguration(url,method,status), new TcpConfiguration(tcpHost, tcpPorts), log, shutdown, kill);
+            return new WaitConfiguration(time,
+                                         postStart != null || preStop != null ? new ExecConfiguration(postStart, preStop) : null,
+                                         url != null ? new HttpConfiguration(url,method,status) : null,
+                                         tcpPorts != null ? new TcpConfiguration(tcpMode, tcpHost, tcpPorts) : null,
+                                         log,
+                                         shutdown,
+                                         kill);
         }
 
         public Builder preStop(String command) {
@@ -166,10 +168,11 @@ public class WaitConfiguration {
         }
     }
 
-    public static class ExecConfiguration {
-        /** @parameter */
+    public static class ExecConfiguration implements Serializable {
+        @Parameter
         private String postStart;
-        /** @parameter */
+
+        @Parameter
         private String preStop;
 
         public ExecConfiguration() {}
@@ -188,22 +191,26 @@ public class WaitConfiguration {
         }
     }
 
-    public static class HttpConfiguration {
+    public static class HttpConfiguration implements Serializable {
 
-        /** @parameter */
+        @Parameter
         private String url;
 
-        /** @parameter */
+        @Parameter
         private String method;
 
-        /** @parameter */
+        @Parameter
         private String status;
+
+        @Parameter
+        private boolean allowAllHosts;
 
         public HttpConfiguration() {}
 
         private HttpConfiguration(String url, String method, String status) {
             this.url = url;
             this.method = method;
+            this.status = status;
         }
 
         public String getUrl() {
@@ -217,29 +224,47 @@ public class WaitConfiguration {
         public String getStatus() {
             return status;
         }
+
+        public boolean isAllowAllHosts() {
+            return allowAllHosts;
+        }
     }
 
-    public static class TcpConfiguration
-    {
+    public enum TcpConfigMode {
+        // Use mapped ports
+        mapped,
+        // Use ports directly on the container
+        direct,
+    }
+
+    public static class TcpConfiguration implements Serializable {
+        @Parameter
         private String host;
 
+        @Parameter
         private List<Integer> ports;
 
-        public TcpConfiguration() {};
+        @Parameter
+        private TcpConfigMode mode;
 
-        private TcpConfiguration(String host, List<Integer> ports) {
+        public TcpConfiguration() {}
+
+        private TcpConfiguration(TcpConfigMode mode, String host, List<Integer> ports) {
+            this.mode = mode;
             this.host = host;
             this.ports = ports;
         }
 
-        public String getHost()
-        {
+        public String getHost() {
             return host;
         }
 
-        public List<Integer> getPorts()
-        {
+        public List<Integer> getPorts() {
             return ports;
+        }
+
+        public TcpConfigMode getMode() {
+            return mode;
         }
     }
 
